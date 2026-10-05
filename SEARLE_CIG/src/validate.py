@@ -23,6 +23,24 @@ import time
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 
+def load_cirr_reference_captions(dataset_path: str, split: str) -> Dict[int, str]:
+    """Load one reference-image caption per CIRR pair from captions_ext."""
+    captions_path = os.path.join(dataset_path, 'cirr', 'captions_ext', f'cap.ext.rc2.{split}.json')
+    with open(captions_path) as file:
+        records = json.load(file)
+    return {
+        int(record['pairid']): '' if (caption := record.get('caption_extend', {}).get('0', '').strip()).startswith('[') else caption
+        for record in records
+    }
+
+
+def compose_reference_caption_prompt(reference_caption: str, delta_caption: str) -> str:
+    reference_caption = reference_caption.strip(' .')
+    if reference_caption:
+        return f'a photo of {reference_caption}'
+    return 'a photo'
+
+
 @torch.no_grad()
 def fiq_generate_val_predictions(clip_model: CLIP, relative_val_dataset: Dataset, ref_names_list: List[str],
                                  pseudo_tokens: torch.Tensor) -> Tuple[torch.Tensor, List[str]]:
@@ -73,7 +91,7 @@ def fiq_generate_val_predictions(clip_model: CLIP, relative_val_dataset: Dataset
         predicted_features = F.normalize((F.normalize(text_features) + F.normalize(text_features_reversed)) / 2)
         predicted_features_gen = F.normalize((F.normalize(text_features_gen) + F.normalize(text_features_reversed_gen)) / 2)
 
-        predicted_features = F.normalize(F.normalize(predicted_features) * 0.9 + F.normalize(predicted_features_gen) * 0.1)
+        predicted_features = F.normalize(F.normalize(predicted_features) * 0.5 + F.normalize(predicted_features_gen) * 0.5)
 
         predicted_features_list.append(predicted_features)
         target_names_list.extend(target_names)
@@ -145,7 +163,8 @@ def fiq_val_retrieval(dataset_path: str, dress_type: str, clip_model_name: str, 
 
 @torch.no_grad()
 def cirr_generate_val_predictions(clip_model: CLIP, relative_val_dataset: Dataset, ref_names_list: List[str],
-                                  pseudo_tokens: torch.Tensor) -> \
+                                  pseudo_tokens: torch.Tensor, reference_captions: Dict[int, str],
+                                  fusion_weights: Tuple[float, float, float]) -> \
         Tuple[torch.Tensor, List[str], List[str], List[List[str]]]:
     """
     Generates features predictions for the validation set of CIRR
@@ -172,14 +191,25 @@ def cirr_generate_val_predictions(clip_model: CLIP, relative_val_dataset: Datase
 
         input_captions = [
             f"a photo of $ that {rel_caption}" for rel_caption in relative_captions]
+        caption_prompts = [
+            compose_reference_caption_prompt(reference_captions[int(pair_id)], rel_caption)
+            for pair_id, rel_caption in zip(pairs_id, relative_captions)
+        ]
 
         batch_tokens = torch.vstack([pseudo_tokens[0][ref_names_list.index(ref)].unsqueeze(0) for ref in pairs_id])
         batch_tokens_gen = torch.vstack([pseudo_tokens[1][ref_names_list.index(ref)].unsqueeze(0) for ref in pairs_id])
         tokenized_input_captions = clip.tokenize(input_captions, context_length=77).to(device)
+        tokenized_caption_prompts = clip.tokenize(caption_prompts, context_length=77, truncate=True).to(device)
         text_features = encode_with_pseudo_tokens(clip_model, tokenized_input_captions, batch_tokens)
 
         text_features_gen = encode_with_pseudo_tokens(clip_model, tokenized_input_captions, batch_tokens_gen)
-        predicted_features =F.normalize( F.normalize(text_features)*0.85 + F.normalize(text_features_gen)*0.15)
+        caption_features = clip_model.encode_text(tokenized_caption_prompts)
+        ref_weight, gen_weight, caption_weight = fusion_weights
+        predicted_features = F.normalize(
+            F.normalize(text_features) * ref_weight
+            + F.normalize(text_features_gen) * gen_weight
+            + F.normalize(caption_features) * caption_weight
+        )
 
         predicted_features_list.append(predicted_features)
         target_names_list.extend(target_names)
@@ -189,12 +219,13 @@ def cirr_generate_val_predictions(clip_model: CLIP, relative_val_dataset: Datase
 
     predicted_features = torch.vstack(predicted_features_list)
 
-    return predicted_features, reference_names_list, pair_id_list, group_members_list
+    return predicted_features, reference_names_list, target_names_list, group_members_list
 
 
 @torch.no_grad()
 def cirr_compute_val_metrics(relative_val_dataset: Dataset, clip_model: CLIP, index_features: torch.Tensor,
-                             index_names: List[str], ref_names_list: List[str], pseudo_tokens: torch.Tensor) \
+                             index_names: List[str], ref_names_list: List[str], pseudo_tokens: torch.Tensor,
+                             reference_captions: Dict[int, str], fusion_weights: Tuple[float, float, float]) \
         -> Dict[str, float]:
     """
     Compute the retrieval metrics on the CIRR validation set given the dataset, pseudo tokens and the reference names
@@ -202,7 +233,9 @@ def cirr_compute_val_metrics(relative_val_dataset: Dataset, clip_model: CLIP, in
 
     # Generate the predicted features
     predicted_features, reference_names, target_names, group_members = \
-        cirr_generate_val_predictions(clip_model, relative_val_dataset, ref_names_list, pseudo_tokens)
+        cirr_generate_val_predictions(
+            clip_model, relative_val_dataset, ref_names_list, pseudo_tokens, reference_captions, fusion_weights
+        )
 
 
     index_features = index_features.to(device)
@@ -322,7 +355,8 @@ def cirr_generate_test_dicts(relative_test_dataset: CIRRDataset, clip_model: CLI
 
 @torch.no_grad()
 def cirr_val_retrieval(dataset_path: str, clip_model_name: str, ref_names_list: list, pseudo_tokens: torch.Tensor,
-                       preprocess: callable) -> Dict[str, float]:
+                       preprocess: callable, generated_image_dir: Optional[str] = None,
+                       fusion_weights: Tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)) -> Dict[str, float]:
     """
     Compute the retrieval metrics on the CIRR validation set given the pseudo tokens and the reference names
     """
@@ -336,10 +370,13 @@ def cirr_val_retrieval(dataset_path: str, clip_model_name: str, ref_names_list: 
     index_features, index_names = extract_image_features(classic_val_dataset, clip_model)
 
     # Define the relative validation dataset
-    relative_val_dataset = CIRRDataset(dataset_path, 'val', 'relative', preprocess)
+    relative_val_dataset = CIRRDataset(
+        dataset_path, 'val', 'relative', preprocess, generated_image_dir=generated_image_dir
+    )
+    reference_captions = load_cirr_reference_captions(dataset_path, 'val')
 
     return cirr_compute_val_metrics(relative_val_dataset, clip_model, index_features, index_names,
-                                    ref_names_list, pseudo_tokens)
+                                    ref_names_list, pseudo_tokens, reference_captions, fusion_weights)
 
 
 
@@ -497,6 +534,12 @@ def main():
     parser.add_argument("--dataset-path", type=str, help="Path to the dataset", required=True)
     parser.add_argument("--generated-image-dir", type=str, default=None,
                         help="Directory containing generated images named as 00000.png, 00001.png, ...")
+    parser.add_argument("--cirr-ref-weight", type=float, default=1 / 3,
+                        help="Fusion weight for the reference-image query branch")
+    parser.add_argument("--cirr-gen-weight", type=float, default=1 / 3,
+                        help="Fusion weight for the generated-image query branch")
+    parser.add_argument("--cirr-caption-weight", type=float, default=1 / 3,
+                        help="Fusion weight for the reference-caption plus delta text branch")
 
     parser.add_argument("--preprocess-type", default="targetpad", type=str, choices=['clip', 'targetpad'],
                         help="Preprocess pipeline to use")
@@ -509,6 +552,10 @@ def main():
         raise ValueError("Experiment name is required when using phi or oti evaluation type")
     if args.eval_type == 'phi' and args.phi_checkpoint_name is None:
         raise ValueError("Phi checkpoint name is required when using phi evaluation type")
+    if min(args.cirr_ref_weight, args.cirr_gen_weight, args.cirr_caption_weight) < 0:
+        raise ValueError("CIRR fusion weights must be non-negative")
+    if args.cirr_ref_weight + args.cirr_gen_weight + args.cirr_caption_weight == 0:
+        raise ValueError("At least one CIRR fusion weight must be positive")
 
     if args.eval_type == 'oti':
         experiment_path = PROJECT_ROOT / 'data' / "oti_pseudo_tokens" / args.dataset.lower() / 'val' / args.exp_name
@@ -618,7 +665,8 @@ def main():
     elif args.dataset.lower() == 'cirr':
         cirr_metrics = cirr_val_retrieval(
             args.dataset_path, clip_model_name, ref_names_list, pseudo_tokens,
-            preprocess, generated_image_dir=args.generated_image_dir
+            preprocess, generated_image_dir=args.generated_image_dir,
+            fusion_weights=(args.cirr_ref_weight, args.cirr_gen_weight, args.cirr_caption_weight)
         )
 
         for k, v in cirr_metrics.items():
