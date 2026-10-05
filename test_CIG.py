@@ -52,6 +52,7 @@ unet = UNet2DConditionModel.from_pretrained(
 
 vae = AutoencoderKL.from_pretrained(
     args.vae_repo,
+    use_safetensors=True,
     torch_dtype=dtype,
     cache_dir=args.cache_dir
 ).to(device)

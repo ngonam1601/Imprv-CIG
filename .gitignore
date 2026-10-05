@@ -1,0 +1,25 @@
+# Local environments and Python caches
+.venv/
+__pycache__/
+*.py[cod]
+.locks/
+.env
+.env.*
+
+# Datasets, generated images, model weights, and experiment artifacts
+/data/
+/SEARLE_CIG/data/
+/analysis/
+/pretrained_weights/
+/models--*/
+/.cache/
+*.pt
+*.pth
+*.npz
+*.npy
+*.safetensors
+*.zip
+
+# Local session notes and historical reports
+/SESSION_HANDOFF.md
+/validation_cig_analysis_report.md

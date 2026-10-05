@@ -67,8 +67,9 @@ def encode_with_pseudo_tokens_HF(clip_model: CLIPTextModelWithProjection, text: 
         return x
 
 # Model and processor setup
-phi_path = '/path/to/phi_best.pt'
-phi_path_2 = '/path/to/phi_best_giga.pt'
+project_root = os.path.dirname(os.path.abspath(__file__))
+phi_path = os.path.join(project_root, 'pretrained_weights', 'phi_best.pt')
+phi_path_2 = os.path.join(project_root, 'pretrained_weights', 'phi_best_giga.pt')
 clip_model_name = 'openai/clip-vit-large-patch14'
 clip_model_name2 = 'Geonmo/CLIP-Giga-config-fixed'
 
@@ -101,7 +102,7 @@ phi_2 = phi_2.to(device="cuda").eval()
 
 # Dataset selection
 if args.dataset == 'cirr':
-    dataset_path = "/path/to/cirr/dataset"
+    dataset_path = os.path.join(project_root, 'data', 'cirr')
     dataset = CIRRDataset(dataset_path, split='test1', preprocess=clip_preprocess)
 elif args.dataset == 'fashioniq':
     dataset_path = "/path/to/fashioniq/dataset"
@@ -110,7 +111,7 @@ elif args.dataset == 'fashioniq':
 # DataLoader setup
 dataloader = torch.utils.data.DataLoader(
     dataset,
-    batch_size=4,
+    batch_size=1,
     shuffle=False,
     num_workers=4,
 )
