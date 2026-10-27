@@ -1,0 +1,8 @@
+# Separate environment for experiment_qwen_captions_cirr.py (Qwen-VL needs newer transformers than
+# requirements.txt). Caption generation only; evaluation runs in the main environment.
+torch==2.5.1
+torchvision==0.20.1
+transformers==4.57.1
+accelerate==1.2.1
+qwen-vl-utils==0.0.14
+pillow
