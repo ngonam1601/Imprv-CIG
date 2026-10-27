@@ -154,5 +154,9 @@ weights 1/1/1 unless stated. Caption-free 1/1/0 is the reference.
 | Qwen3-VL-8B target description (src5 prompt) | **27.66** | **60.15** | **73.02** | **92.54** | **59.14** | **34.01** |
 
 Captioning the reference image does not help with any captioner; describing the
-target image after the edit does. Qwen2.5-VL-3B with `--bank cross` reaches
-R@1 30.90. SEARLE-XL (ViT-L/14) did not improve over ViT-B/32 on CIRR.
+target image after the edit does. With `--bank cross` (queries scored
+independently), R@1 is 30.90 for Qwen2.5-VL-3B and 31.87 for Qwen3-VL-8B.
+SEARLE-XL (ViT-L/14) did not improve over ViT-B/32 on CIRR.
+
+Qwen captions use unquantised weights (src5 uses AWQ / FP8 builds), batched
+generation and at most 512 visual tokens per image.
