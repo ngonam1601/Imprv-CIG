@@ -19,7 +19,7 @@ OUT=ROOT/'analysis/dual_softmax'
 VAL_CACHES={1600:'analysis/blip/cache_val_seed1600.pt',1601:'analysis/blip/cache_val_seed1601.pt'}
 
 @torch.no_grad()
-def encode_captions(caption_dir,split,triplets,compose='plain'):
+def encode_captions(caption_dir,split,triplets,compose='plain',model=None):
     path=ROOT/caption_dir/f'captions_edit_{split}.json'
     if not path.exists():path=ROOT/caption_dir/f'captions_query_{split}.json'  # per-query reference captions
     captions=json.loads(path.read_text())['captions']
@@ -29,9 +29,11 @@ def encode_captions(caption_dir,split,triplets,compose='plain'):
         prompts=[captions[str(t['pairid'])].strip() for t in triplets]
     else:
         prompts=[f"{captions[str(t['pairid'])].strip()} {t['caption'].strip(' .')}" for t in triplets]
-    model,_=clip.load(str(ROOT/'ViT-B-32.pt'),device='cpu',jit=False)
-    model=model.float().eval()
-    return torch.cat([F.normalize(model.encode_text(clip.tokenize(prompts[i:i+256],truncate=True)),dim=-1) for i in range(0,len(prompts),256)])
+    if model is None:
+        model,_=clip.load(str(ROOT/'ViT-B-32.pt'),device='cpu',jit=False)
+        model=model.float().eval()
+    device=next(model.parameters()).device
+    return torch.cat([F.normalize(model.encode_text(clip.tokenize(prompts[i:i+256],truncate=True).to(device)),dim=-1).cpu() for i in range(0,len(prompts),256)])
 
 def queries(cache,weights,text=None):
     if text is not None:cache=dict(cache,text=text)

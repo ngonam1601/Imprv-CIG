@@ -160,3 +160,43 @@ SEARLE-XL (ViT-L/14) did not improve over ViT-B/32 on CIRR.
 
 Qwen captions use unquantised weights (src5 uses AWQ / FP8 builds), batched
 generation and at most 512 visual tokens per image.
+
+## v0.3: LinCIR retrieval and larger CLIP backbones
+
+The CIG-XL pseudo-target images are unchanged: they are generated once (SDXL
+conditioned with LinCIR Phi for ViT-L/14 and ViT-G/14) and shared by every
+retrieval baseline. Only the retrieval Phi and CLIP backbone change below.
+
+### Scripts (`SEARLE_CIG/src/`)
+
+| Script | Change |
+|---|---|
+| `experiment_lincir_cirr.py` | New. LinCIR retrieval as in navervision/lincir: HuggingFace CLIP, LinCIR Phi from `pretrained_weights/` (`phi_best.pt` ViT-L/14, `phi_best_giga.pt` ViT-G/14), query `a photo of $ that {delta}`, center-crop preprocessing. `--backbone L|G`, `--caption-dir`, `--compose`. Same weights, dual-softmax and export as `experiment_vitl14_cirr.py`. Caches in `/root/lincir_cache/<backbone>`, outputs in `analysis/lincir_<backbone>/`. |
+| `experiment_vitl14_cirr.py` | `--caption-dir`/`--compose` replace the Idefics2 caption branch (default unchanged); caption embeddings cached per run; `export` takes an output directory. "SEARLE-XL" in the SEARLE paper = SEARLE on ViT-L/14. |
+| `dual_softmax_cirr.py` | `encode_captions` accepts a text encoder (default still CLIP ViT-B/32). |
+
+```bash
+python SEARLE_CIG/src/experiment_lincir_cirr.py --backbone G \
+  --caption-dir analysis/qwen3vl8b_composed --compose only
+python SEARLE_CIG/src/experiment_vitl14_cirr.py \
+  --caption-dir analysis/qwen3vl8b_composed --compose only
+```
+
+### Validation results
+
+CIRR validation R@1, mean of seeds 1600/1601, ref/gen/caption 1/1/1 with the
+target-description caption (src5 prompt, caption alone). Cells: no DSM / DSM
+cross bank / DSM self. Caption-free 1/1/0 without DSM is the paper setting.
+DSM T was chosen on the even-pair-id half: 0.02 (B/32, LinCIR L/14), 0.03
+(SEARLE L/14), 0.05 (LinCIR G/14; 0.07–0.2 were worse).
+
+| Method + CIG-XL | 1/1/0 | Qwen2.5-VL-3B | Qwen3-VL-8B |
+|---|---:|---|---|
+| SEARLE, ViT-B/32 | 26.46 | 26.99 / 30.90 / 32.70 | 27.66 / 31.87 / 34.01 |
+| SEARLE, ViT-L/14 | 26.00 | 27.68 / 31.14 / 32.99 | 28.59 / 31.38 / 33.34 |
+| LinCIR, ViT-L/14 | 25.57 | 27.23 / 30.93 / 32.93 | 27.85 / 31.40 / 32.19 |
+| LinCIR, ViT-G/14 | 35.57 | 38.17 / 39.14 / 40.86 | **38.60 / 39.32 / 41.80** |
+
+BLIP-2 reference caption + delta (src4) lowers R@1 at 1/1/1 with LinCIR too:
+24.83 (L/14) and 33.94 (G/14). LinCIR has no ViT-B/32 Phi and SEARLE has no
+ViT-G/14 Phi.
